@@ -4,7 +4,6 @@ import tempfile
 
 import duckdb
 
-from .credentials import Attachment
 from .credentials import DuckDBCredentials
 from dbt.contracts.connection import AdapterResponse
 from dbt.exceptions import DbtRuntimeError
@@ -41,47 +40,11 @@ class DuckDBConnectionWrapper:
 
 
 class Environment:
-    def handle(self):
-        raise NotImplementedError
-
-    def cursor(self):
-        raise NotImplementedError
-
-    def submit_python_job(self, handle, parsed_model: dict, compiled_code: str) -> AdapterResponse:
-        raise NotImplementedError
-
-    def close(self):
-        raise NotImplementedError
-
-
-class LocalEnvironment(Environment):
-    def __init__(self, credentials: DuckDBCredentials):
-        self.creds = credentials
-        self.handles = 0
-        self.conn = duckdb.connect(credentials.path, read_only=False)
-        # install any extensions on the connection
-        if credentials.extensions is not None:
-            for extension in credentials.extensions:
-                self.conn.execute(f"INSTALL '{extension}'")
-
-        # Attach any fsspec filesystems on the database
-        if credentials.filesystems:
-            import fsspec
-
-            for spec in credentials.filesystems:
-                curr = spec.copy()
-                fsimpl = curr.pop("fs")
-                fs = fsspec.filesystem(fsimpl, **curr)
-                self.conn.register_filesystem(fs)
-
-        # attach any databases that we will be using
-        if credentials.attach:
-            for entry in credentials.attach:
-                attachment = Attachment(**entry)
-                self.conn.execute(attachment.to_sql())
+    def __init__(self, conn, creds: DuckDBCredentials):
+        self.conn = conn
+        self.creds = creds
 
     def handle(self):
-        self.handles += 1
         return DuckDBConnectionWrapper(self)
 
     def cursor(self):
@@ -94,6 +57,42 @@ class LocalEnvironment(Environment):
             # to the correct type
             cursor.execute(f"SET {key} = '{value}'")
         return cursor
+
+    def close(self, cursor):
+        cursor.close()
+
+    def submit_python_job(self, handle, parsed_model: dict, compiled_code: str) -> AdapterResponse:
+        raise NotImplementedError
+
+
+class LocalEnvironment(Environment):
+    def __init__(self, credentials: DuckDBCredentials):
+        conn = duckdb.connect(credentials.path, read_only=False)
+        # install any extensions on the connection
+        if credentials.extensions is not None:
+            for extension in credentials.extensions:
+                conn.execute(f"INSTALL '{extension}'")
+
+        # Attach any fsspec filesystems on the database
+        if credentials.filesystems:
+            import fsspec
+
+            for spec in credentials.filesystems:
+                curr = spec.copy()
+                fsimpl = curr.pop("fs")
+                fs = fsspec.filesystem(fsimpl, **curr)
+                conn.register_filesystem(fs)
+
+        # attach any databases that we will be using
+        if credentials.attach:
+            for attachment in credentials.attach:
+                conn.execute(attachment.to_sql())
+        super().__init__(conn, credentials)
+        self.handles = 0
+
+    def handle(self):
+        self.handles += 1
+        return super().handle()
 
     def submit_python_job(self, handle, parsed_model: dict, compiled_code: str) -> AdapterResponse:
         con = handle.cursor()
@@ -135,7 +134,7 @@ class LocalEnvironment(Environment):
         return AdapterResponse(_message="OK")
 
     def close(self, cursor):
-        cursor.close()
+        super().close(cursor)
         self.handles -= 1
         if self.conn and self.handles == 0 and self.creds.path != ":memory:":
             self.conn.close()
@@ -147,4 +146,9 @@ class LocalEnvironment(Environment):
 
 
 def create(creds: DuckDBCredentials) -> Environment:
-    return LocalEnvironment(creds)
+    if creds.remote:
+        from .buenavista import BVEnvironment
+
+        return BVEnvironment(creds)
+    else:
+        return LocalEnvironment(creds)
