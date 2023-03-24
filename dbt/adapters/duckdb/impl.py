@@ -1,6 +1,4 @@
-import importlib.util
 import os
-import tempfile
 from typing import List
 from typing import Optional
 from typing import Sequence
@@ -107,7 +105,12 @@ class DuckDBAdapter(SQLAdapter):
 
         ret = []
         for k, v in rendered_options.items():
-            if k.lower() in {"delimiter", "quote", "escape", "null"} and not v.startswith("'"):
+            if k.lower() in {
+                "delimiter",
+                "quote",
+                "escape",
+                "null",
+            } and not v.startswith("'"):
                 ret.append(f"{k} '{v}'")
             else:
                 ret.append(f"{k} {v}")
@@ -134,47 +137,14 @@ class DuckDBAdapter(SQLAdapter):
             pass
 
     def submit_python_job(self, parsed_model: dict, compiled_code: str) -> AdapterResponse:
-
         connection = self.connections.get_if_exists()
         if not connection:
             connection = self.connections.get_thread_connection()
-        con = connection.handle.cursor()
-
-        def load_df_function(table_name: str):
-            """
-            Currently con.table method dos not support fully qualified name - https://github.com/duckdb/duckdb/issues/5038
-
-            Can be replaced by con.table, after it is fixed.
-            """
-            return con.query(f"select * from {table_name}")
-
-        identifier = parsed_model["alias"]
-        mod_file = tempfile.NamedTemporaryFile(suffix=".py", delete=False)
-        mod_file.write(compiled_code.lstrip().encode("utf-8"))
-        mod_file.close()
-        try:
-            spec = importlib.util.spec_from_file_location(identifier, mod_file.name)
-            if not spec:
-                raise DbtRuntimeError(
-                    "Failed to load python model as module: {}".format(identifier)
-                )
-            module = importlib.util.module_from_spec(spec)
-            if spec.loader:
-                spec.loader.exec_module(module)
-            else:
-                raise DbtRuntimeError(
-                    "Python module spec is missing loader: {}".format(identifier)
-                )
-
-            # Do the actual work to run the code here
-            dbt = module.dbtObj(load_df_function)
-            df = module.model(dbt, con)
-            module.materialize(df, con)
-        except Exception as err:
-            raise DbtRuntimeError(f"Python model failed:\n" f"{err}")
-        finally:
-            os.unlink(mod_file.name)
-        return AdapterResponse(_message="OK")
+        if DuckDBConnectionManager.ENV:
+            env = DuckDBConnectionManager.ENV
+            return env.submit_python_job(connection.handle, parsed_model, compiled_code)
+        else:
+            raise Exception("No ENV defined to execute dbt-duckdb python models!")
 
     def get_rows_different_sql(
         self,

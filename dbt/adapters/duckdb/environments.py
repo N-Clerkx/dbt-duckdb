@@ -1,8 +1,13 @@
+import importlib.util
+import os
+import tempfile
+
 import duckdb
 
-import dbt.exceptions
 from .credentials import Attachment
 from .credentials import DuckDBCredentials
+from dbt.contracts.connection import AdapterResponse
+from dbt.exceptions import DbtRuntimeError
 
 
 class DuckDBCursorWrapper:
@@ -20,7 +25,7 @@ class DuckDBCursorWrapper:
             else:
                 return self._cursor.execute(sql, bindings)
         except RuntimeError as e:
-            raise dbt.exceptions.DbtRuntimeError(str(e))
+            raise DbtRuntimeError(str(e))
 
 
 class DuckDBConnectionWrapper:
@@ -40,6 +45,9 @@ class Environment:
         raise NotImplementedError
 
     def cursor(self):
+        raise NotImplementedError
+
+    def submit_python_job(self, handle, parsed_model: dict, compiled_code: str) -> AdapterResponse:
         raise NotImplementedError
 
     def close(self):
@@ -86,6 +94,45 @@ class LocalEnvironment(Environment):
             # to the correct type
             cursor.execute(f"SET {key} = '{value}'")
         return cursor
+
+    def submit_python_job(self, handle, parsed_model: dict, compiled_code: str) -> AdapterResponse:
+        con = handle.cursor()
+
+        def load_df_function(table_name: str):
+            """
+            Currently con.table method dos not support fully qualified name - https://github.com/duckdb/duckdb/issues/5038
+
+            Can be replaced by con.table, after it is fixed.
+            """
+            return con.query(f"select * from {table_name}")
+
+        identifier = parsed_model["alias"]
+        mod_file = tempfile.NamedTemporaryFile(suffix=".py", delete=False)
+        mod_file.write(compiled_code.lstrip().encode("utf-8"))
+        mod_file.close()
+        try:
+            spec = importlib.util.spec_from_file_location(identifier, mod_file.name)
+            if not spec:
+                raise DbtRuntimeError(
+                    "Failed to load python model as module: {}".format(identifier)
+                )
+            module = importlib.util.module_from_spec(spec)
+            if spec.loader:
+                spec.loader.exec_module(module)
+            else:
+                raise DbtRuntimeError(
+                    "Python module spec is missing loader: {}".format(identifier)
+                )
+
+            # Do the actual work to run the code here
+            dbt = module.dbtObj(load_df_function)
+            df = module.model(dbt, con)
+            module.materialize(df, con)
+        except Exception as err:
+            raise DbtRuntimeError(f"Python model failed:\n" f"{err}")
+        finally:
+            os.unlink(mod_file.name)
+        return AdapterResponse(_message="OK")
 
     def close(self, cursor):
         cursor.close()
