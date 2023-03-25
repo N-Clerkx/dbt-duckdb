@@ -16,7 +16,7 @@ from dbt.dataclass_schema import dbtClassMixin
 
 @dataclass
 class Attachment(dbtClassMixin):
-    # The path to the database to be attached; may be a URL
+    # The path to the database to be attached (may be a URL)
     path: str
 
     # The type of the attached database (defaults to duckdb, but may be supported by an extension)
@@ -47,6 +47,8 @@ class Attachment(dbtClassMixin):
 class Remote(dbtClassMixin):
     host: str
     port: int
+    user: str
+    password: Optional[str] = None
 
 
 @dataclass
@@ -87,7 +89,7 @@ class DuckDBCredentials(Credentials):
     filesystems: Optional[List[Dict[str, Any]]] = None
 
     # Used to configure remote environments/connections
-    remote: Optional[Dict[str, Any]] = None
+    remote: Optional[Remote] = None
 
     @classmethod
     def __pre_deserialize__(cls, data: Dict[Any, Any]) -> Dict[Any, Any]:

@@ -9,7 +9,13 @@ from dbt.contracts.connection import AdapterResponse
 
 class BVEnvironment(Environment):
     def __init__(self, credentials: DuckDBCredentials):
-        conn = psycopg2.connect(credentials.uri)
+        remote = credentials.remote
+        conn = psycopg2.connect(
+            dbname=credentials.database,
+            user=remote.user,
+            host=remote.host,
+            port=remote.port,
+        )
 
         # install any extensions on the connection
         if credentials.extensions is not None:
