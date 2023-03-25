@@ -2,40 +2,40 @@ import json
 
 import psycopg2
 
-from .credentials import DuckDBCredentials
+from . import credentials
 from .environments import Environment
 from dbt.contracts.connection import AdapterResponse
 
 
 class BVEnvironment(Environment):
-    def __init__(self, credentials: DuckDBCredentials):
-        remote = credentials.remote
-        conn = psycopg2.connect(
-            dbname=credentials.database,
+    @classmethod
+    def _get_conn(cls, dbname: str, remote: credentials.Remote):
+        return psycopg2.connect(
+            dbname=dbname,
             user=remote.user,
             host=remote.host,
             port=remote.port,
         )
 
-        # install any extensions on the connection
-        if credentials.extensions is not None:
-            for extension in credentials.extensions:
-                conn.execute(f"INSTALL '{extension}'")
+    def __init__(self, credentials: credentials.DuckDBCredentials):
+        self.creds = credentials
+        if not self.creds.remote:
+            raise Exception("BVConnection only works with a remote host")
 
-        # Attach any fsspec filesystems on the database
-        if credentials.filesystems:
-            # TODO: extension for registering these
-            pass
+    def handle(self):
+        # Extensions/settings need to be configured per cursor
+        conn = self._get_conn(self.creds.database, self.creds.remote)
+        cursor = conn.cursor()
+        for ext in self.creds.extensions or []:
+            cursor.execute(f"LOAD '{ext}'")
+        for key, value in self.creds.load_settings().items():
+            # Okay to set these as strings because DuckDB will cast them
+            # to the correct type
+            cursor.execute(f"SET {key} = '{value}'")
+        cursor.close()
+        return conn
 
-        # attach any databases that we will be using
-        if credentials.attach:
-            for attachment in credentials.attach:
-                conn.execute(attachment.to_sql())
-        super().__init__(conn, credentials)
-
-    def submit_python_job(
-        self, handle, parsed_model: dict, compiled_code: str
-    ) -> AdapterResponse:
+    def submit_python_job(self, handle, parsed_model: dict, compiled_code: str) -> AdapterResponse:
         identifier = parsed_model["alias"]
         payload = {
             "method": "dbt_python_job",

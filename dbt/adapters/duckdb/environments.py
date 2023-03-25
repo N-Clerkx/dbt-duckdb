@@ -28,9 +28,9 @@ class DuckDBCursorWrapper:
 
 
 class DuckDBConnectionWrapper:
-    def __init__(self, env):
+    def __init__(self, env, cursor):
         self._env = env
-        self._cursor = DuckDBCursorWrapper(env.cursor())
+        self._cursor = DuckDBCursorWrapper(cursor)
 
     def close(self):
         self._env.close(self._cursor)
@@ -40,14 +40,7 @@ class DuckDBConnectionWrapper:
 
 
 class Environment:
-    def __init__(self, conn, creds: DuckDBCredentials):
-        self.conn = conn
-        self.creds = creds
-
     def handle(self):
-        return DuckDBConnectionWrapper(self)
-
-    def cursor(self):
         # Extensions/settings need to be configured per cursor
         cursor = self.conn.cursor()
         for ext in self.creds.extensions or []:
@@ -67,11 +60,12 @@ class Environment:
 
 class LocalEnvironment(Environment):
     def __init__(self, credentials: DuckDBCredentials):
-        conn = duckdb.connect(credentials.path, read_only=False)
+        self.conn = duckdb.connect(credentials.path, read_only=False)
+        self.creds = credentials
         # install any extensions on the connection
         if credentials.extensions is not None:
             for extension in credentials.extensions:
-                conn.execute(f"INSTALL '{extension}'")
+                self.conn.execute(f"INSTALL '{extension}'")
 
         # Attach any fsspec filesystems on the database
         if credentials.filesystems:
@@ -81,18 +75,25 @@ class LocalEnvironment(Environment):
                 curr = spec.copy()
                 fsimpl = curr.pop("fs")
                 fs = fsspec.filesystem(fsimpl, **curr)
-                conn.register_filesystem(fs)
+                self.conn.register_filesystem(fs)
 
         # attach any databases that we will be using
         if credentials.attach:
             for attachment in credentials.attach:
-                conn.execute(attachment.to_sql())
-        super().__init__(conn, credentials)
+                self.conn.execute(attachment.to_sql())
         self.handles = 0
 
     def handle(self):
         self.handles += 1
-        return super().handle()
+        # Extensions/settings need to be configured per cursor
+        cursor = self.conn.cursor()
+        for ext in self.creds.extensions or []:
+            cursor.execute(f"LOAD '{ext}'")
+        for key, value in self.creds.load_settings().items():
+            # Okay to set these as strings because DuckDB will cast them
+            # to the correct type
+            cursor.execute(f"SET {key} = '{value}'")
+        return DuckDBConnectionWrapper(self, cursor)
 
     def submit_python_job(self, handle, parsed_model: dict, compiled_code: str) -> AdapterResponse:
         con = handle.cursor()
