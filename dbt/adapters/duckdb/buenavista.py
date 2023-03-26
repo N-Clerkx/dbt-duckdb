@@ -25,13 +25,7 @@ class BVEnvironment(Environment):
     def handle(self):
         # Extensions/settings need to be configured per cursor
         conn = self._get_conn(self.creds.database, self.creds.remote)
-        cursor = conn.cursor()
-        for ext in self.creds.extensions or []:
-            cursor.execute(f"LOAD '{ext}'")
-        for key, value in self.creds.load_settings().items():
-            # Okay to set these as strings because DuckDB will cast them
-            # to the correct type
-            cursor.execute(f"SET {key} = '{value}'")
+        cursor = self.initialize_cursor(self.creds, conn.cursor())
         cursor.close()
         return conn
 
