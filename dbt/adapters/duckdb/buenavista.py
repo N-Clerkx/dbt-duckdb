@@ -41,3 +41,6 @@ class BVEnvironment(Environment):
         # TODO: handle errors here
         handle.cursor().execute(json.dumps(payload))
         return AdapterResponse(_message="OK")
+
+    def get_binding_char(self) -> str:
+        return "%s"

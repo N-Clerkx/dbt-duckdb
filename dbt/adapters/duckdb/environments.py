@@ -121,6 +121,9 @@ class Environment:
     def submit_python_job(self, handle, parsed_model: dict, compiled_code: str) -> AdapterResponse:
         raise NotImplementedError
 
+    def get_binding_char(self) -> str:
+        return "?"
+
 
 class LocalEnvironment(Environment):
     def __init__(self, credentials: DuckDBCredentials):

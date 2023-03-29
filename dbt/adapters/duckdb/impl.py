@@ -84,6 +84,10 @@ class DuckDBAdapter(SQLAdapter):
         return duckdb.__version__ >= "0.7.0"
 
     @available
+    def get_binding_char(self):
+        return DuckDBConnectionManager.ENV.get_binding_char()
+
+    @available
     def external_write_options(self, write_location: str, rendered_options: dict) -> str:
         if "format" not in rendered_options:
             ext = os.path.splitext(write_location)[1].lower()
