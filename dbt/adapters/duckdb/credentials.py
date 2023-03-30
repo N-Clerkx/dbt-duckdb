@@ -57,6 +57,10 @@ class DuckDBCredentials(Credentials):
     schema: str = "main"
     path: str = ":memory:"
 
+    # Any connection-time configuration information that we need to pass
+    # to DuckDB (e.g., if we need to enable using unsigned extensions)
+    config_options: Optional[Dict[str, Any]] = None
+
     # any extensions we want to install and load (httpfs, parquet, etc.)
     extensions: Optional[Tuple[str, ...]] = None
 

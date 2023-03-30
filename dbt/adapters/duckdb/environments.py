@@ -41,7 +41,10 @@ class DuckDBConnectionWrapper:
 
 class Environment:
     @classmethod
-    def initialize_db(cls, creds, conn):
+    def initialize_db(cls, creds: DuckDBCredentials):
+        config = creds.config_options or {}
+        conn = duckdb.connect(creds.path, read_only=False, config=config)
+
         # install any extensions on the connection
         if creds.extensions is not None:
             for extension in creds.extensions:
@@ -76,15 +79,7 @@ class Environment:
         return cursor
 
     @classmethod
-    def run_python_job(cls, con, parsed_model: dict, compiled_code: str):
-        def load_df_function(table_name: str):
-            """
-            Currently con.table method dos not support fully qualified name - https://github.com/duckdb/duckdb/issues/5038
-
-            Can be replaced by con.table, after it is fixed.
-            """
-            return con.query(f"select * from {table_name}")
-
+    def run_python_job(cls, con, load_df_function, parsed_model: dict, compiled_code: str):
         identifier = parsed_model["alias"]
         mod_file = tempfile.NamedTemporaryFile(suffix=".py", delete=False)
         mod_file.write(compiled_code.lstrip().encode("utf-8"))
@@ -127,12 +122,13 @@ class Environment:
 
 class LocalEnvironment(Environment):
     def __init__(self, credentials: DuckDBCredentials):
-        self.conn = duckdb.connect(credentials.path, read_only=False)
+        self.conn = None
         self.creds = credentials
-        self.initialize_db(self.creds, self.conn)
         self.handles = 0
 
     def handle(self):
+        if not self.conn:
+            self.conn = self.initialize_db(self.creds)
         self.handles += 1
         # Extensions/settings need to be configured per cursor
         cursor = self.initialize_cursor(self.creds, self.conn.cursor())
@@ -140,7 +136,8 @@ class LocalEnvironment(Environment):
 
     def submit_python_job(self, handle, parsed_model: dict, compiled_code: str) -> AdapterResponse:
         con = handle.cursor()
-        self.run_python_job(con, parsed_model, compiled_code)
+        ldf = lambda table_name: con.query(f"select * from {table_name}")
+        self.run_python_job(con, ldf, parsed_model, compiled_code)
         return AdapterResponse(_message="OK")
 
     def close(self, cursor):
